@@ -1,6 +1,9 @@
 import html
 import threading
 import time
+import cProfile
+import pstats
+import io
 
 from modules import shared, progress, errors
 
@@ -21,7 +24,7 @@ def wrap_gradio_gpu_call(func, extra_outputs=None):
     def f(*args, **kwargs):
 
         # if the first argument is a string that says "task(...)", it is treated as a job id
-        if args and type(args[0]) == str and args[0].startswith("task(") and args[0].endswith(")"):
+        if len(args) > 0 and type(args[0]) == str and args[0][0:5] == "task(" and args[0][-1] == ")":
             id_task = args[0]
             progress.add_task_to_queue(id_task)
         else:
@@ -33,7 +36,6 @@ def wrap_gradio_gpu_call(func, extra_outputs=None):
 
             try:
                 res = func(*args, **kwargs)
-                progress.record_results(id_task, res)
             finally:
                 progress.finish_task(id_task)
 
@@ -43,34 +45,32 @@ def wrap_gradio_gpu_call(func, extra_outputs=None):
 
     return wrap_gradio_call(f, extra_outputs=extra_outputs, add_stats=True)
 
-
 def wrap_gradio_call(func, extra_outputs=None, add_stats=False):
     def f(*args, extra_outputs_array=extra_outputs, **kwargs):
         run_memmon = shared.opts.memmon_poll_rate > 0 and not shared.mem_mon.disabled and add_stats
         if run_memmon:
             shared.mem_mon.monitor()
         t = time.perf_counter()
-
         try:
+            if shared.cmd_opts.profile:
+                pr = cProfile.Profile()
+                pr.enable()
             res = list(func(*args, **kwargs))
+            if shared.cmd_opts.profile:
+                pr.disable()
+                s = io.StringIO()
+                ps = pstats.Stats(pr, stream=s)
+                ps.sort_stats(pstats.SortKey.CUMULATIVE)
+                # ps.strip_dirs()
+                ps.print_stats(15)
+                print('Profile:', s.getvalue())
         except Exception as e:
-            # When printing out our debug argument list,
-            # do not print out more than a 100 KB of text
-            max_debug_str_len = 131072
-            message = "Error completing request"
-            arg_str = f"Arguments: {args} {kwargs}"[:max_debug_str_len]
-            if len(arg_str) > max_debug_str_len:
-                arg_str += f" (Argument list truncated at {max_debug_str_len}/{len(arg_str)} characters)"
-            errors.report(f"{message}\n{arg_str}", exc_info=True)
-
+            errors.display(e, 'gradio call')
             shared.state.job = ""
             shared.state.job_count = 0
-
             if extra_outputs_array is None:
                 extra_outputs_array = [None, '']
-
-            error_message = f'{type(e).__name__}: {e}'
-            res = extra_outputs_array + [f"<div class='error'>{html.escape(error_message)}</div>"]
+            res = extra_outputs_array + [f"<div class='error'>{html.escape(type(e).__name__+': '+str(e))}</div>"]
 
         shared.state.skipped = False
         shared.state.interrupted = False

@@ -114,7 +114,7 @@ def infer_params(state_dict):
 
     nf = state_dict["model.0.weight"].shape[0]
     in_nc = state_dict["model.0.weight"].shape[1]
-    out_nc = out_nc
+    # out_nc = out_nc
     scale = 2 ** scale2x
 
     return in_nc, out_nc, nf, nb, plus, scale
